@@ -9,6 +9,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Azure.CosmosDB.BulkExecutor;
 using Microsoft.Azure.CosmosDB.BulkExecutor.BulkImport;
+using Microsoft.Azure.CosmosDB.BulkExecutor.Graph;
+using Microsoft.Azure.CosmosDB.BulkExecutor.Graph.Element;
 using Microsoft.Azure.Documents;
 
 namespace SATPOC
@@ -73,12 +75,67 @@ namespace SATPOC
             List<String> documentsToBeImported = new List<string>();
             FileReader reader = new FileReader(InputFolder);
             documentsToBeImported = reader.LoadDocuments();
-            List<String> jsonDocuments = Utility.XmlToJSON(documentsToBeImported);
-            await RunBulkImportAsync(jsonDocuments);
+            List<Tuple<String, String, String>> mapping = Utility.XmlToTuples(documentsToBeImported);
+            List<GremlinEdge> edges = new List<GremlinEdge>();
+            List<GremlinVertex> vertices = new List<GremlinVertex>();
+
+            foreach (var tuple in mapping)
+            {
+                string outvertex = tuple.Item1;
+                string invertex = tuple.Item2;
+                string type = tuple.Item3;
+
+                if (type == "E")
+                {
+                    GremlinVertex vertex1 = new GremlinVertex(outvertex, "Emisor");
+                    vertex1.AddProperty("pk", outvertex);
+                    GremlinVertex vertex2 = new GremlinVertex(invertex, "CFDI");
+                    vertex2.AddProperty("pk", invertex);
+                    if (!vertices.Contains(vertex1))
+                    {
+                        vertices.Add(vertex1);
+                    }
+
+                    if (!vertices.Contains(vertex2))
+                    {
+                        vertices.Add(vertex2);
+                    }
+
+                    GremlinEdge edge = new GremlinEdge(outvertex + invertex, outvertex + invertex, outvertex, invertex, outvertex, invertex, outvertex, invertex);
+                    if (!edges.Contains(edge))
+                    {
+                        edges.Add(edge);
+                    }
+                }
+                else if (type == "R")
+                {
+                    GremlinVertex vertex1 = new GremlinVertex(outvertex, "CFDI");
+                    vertex1.AddProperty("pk", outvertex);
+                    GremlinVertex vertex2 = new GremlinVertex(invertex, "Receptor");
+                    vertex2.AddProperty("pk", invertex);
+                    if (!vertices.Contains(vertex1))
+                    {
+                        vertices.Add(vertex1);
+                    }
+
+                    if (!vertices.Contains(vertex2))
+                    {
+                        vertices.Add(vertex2);
+                    }
+
+                    GremlinEdge edge = new GremlinEdge(outvertex + invertex, outvertex + invertex, outvertex, invertex, outvertex, invertex, outvertex, invertex);
+                    if (!edges.Contains(edge))
+                    {
+                        edges.Add(edge);
+                    }
+                }
+            }
+
+            await RunBulkImportAsync(edges, vertices);
 
         }
 
-        private async Task RunBulkImportAsync(List<String> documents)
+        private async Task RunBulkImportAsync(List<GremlinEdge> edges, List<GremlinVertex> vertices)
         {
             // Cleanup on start if set in config.
 
@@ -124,74 +181,98 @@ namespace SATPOC
             client.ConnectionPolicy.RetryOptions.MaxRetryWaitTimeInSeconds = 30;
             client.ConnectionPolicy.RetryOptions.MaxRetryAttemptsOnThrottledRequests = 9;
 
-            IBulkExecutor bulkExecutor = new BulkExecutor(client, dataCollection);
-            await bulkExecutor.InitializeAsync();
+
+            IBulkExecutor graphbulkExecutor = new GraphBulkExecutor(client, dataCollection);
+            await graphbulkExecutor.InitializeAsync();
 
             // Set retries to 0 to pass control to bulk executor.
             client.ConnectionPolicy.RetryOptions.MaxRetryWaitTimeInSeconds = 0;
             client.ConnectionPolicy.RetryOptions.MaxRetryAttemptsOnThrottledRequests = 0;
 
-            BulkImportResponse bulkImportResponse = null;
+            BulkImportResponse vResponse = null;
+            BulkImportResponse eResponse = null;
+
             long totalNumberOfDocumentsInserted = 0;
             double totalRequestUnitsConsumed = 0;
             double totalTimeTakenSec = 0;
 
-            var tokenSource = new CancellationTokenSource();
+            var tokenSource = new CancellationTokenSource(); 
             var token = tokenSource.Token;
 
-            for (int i = 0; i < numberOfBatches; i++)
+            try
             {
-                // Generate JSON-serialized documents to import.
+                vResponse = await graphbulkExecutor.BulkImportAsync(
+                        vertices,
+                        enableUpsert: true,
+                        disableAutomaticIdGeneration: true,
+                        maxConcurrencyPerPartitionKeyRange: null,
+                        maxInMemorySortingBatchSize: null,
+                        cancellationToken: token);
 
-                int prefix = i * (int) numberOfDocumentsPerBatch;
-                // Invoke bulk import API.
-
-                var tasks = new List<Task>();
-
-                tasks.Add(Task.Run(async () =>
-                {
-                    Trace.TraceInformation(String.Format("Executing bulk import for batch {0}", i));
-                    do
-                    {
-                        try
-                        {
-                            bulkImportResponse = await bulkExecutor.BulkImportAsync(
-                                documents: documents.GetRange(prefix, (int)numberOfDocumentsPerBatch),
-                                enableUpsert: true,
-                                disableAutomaticIdGeneration: true,
-                                maxConcurrencyPerPartitionKeyRange: null,
-                                maxInMemorySortingBatchSize: null,
-                                cancellationToken: token);
-                        }
-                        catch (DocumentClientException de)
-                        {
-                            Trace.TraceError("Document client exception: {0}", de);
-                            break;
-                        }
-                        catch (Exception e)
-                        {
-                            Trace.TraceError("Exception: {0}", e);
-                            break;
-                        }
-                    } while (bulkImportResponse.NumberOfDocumentsImported < documents.GetRange(prefix, (int)numberOfDocumentsPerBatch).Count);
-
-                },
-                token));
-
-
-                await Task.WhenAll(tasks);
+                eResponse = await graphbulkExecutor.BulkImportAsync(
+                        edges,
+                        enableUpsert: true,
+                        disableAutomaticIdGeneration: true,
+                        maxConcurrencyPerPartitionKeyRange: null,
+                        maxInMemorySortingBatchSize: null,
+                        cancellationToken: token);
+            }
+            catch (DocumentClientException de)
+            {
+                Trace.TraceError("Document client exception: {0}", de);
+            }
+            catch (Exception e)
+            {
+                Trace.TraceError("Exception: {0}", e);
             }
 
-            Trace.WriteLine("Overall summary:");
-            Trace.WriteLine("--------------------------------------------------------------------- ");
-            Trace.WriteLine(String.Format("Inserted {0} docs @ {1} writes/s, {2} RU/s in {3} sec",
-                totalNumberOfDocumentsInserted,
-                Math.Round(totalNumberOfDocumentsInserted / totalTimeTakenSec),
-                Math.Round(totalRequestUnitsConsumed / totalTimeTakenSec),
-                totalTimeTakenSec));
-            Trace.WriteLine(String.Format("Average RU consumption per document: {0}",
-                (totalRequestUnitsConsumed / totalNumberOfDocumentsInserted)));
-            Trace.WriteLine("--------------------------------------------------------------------- ");
+            Console.WriteLine("\nSummary for batch");
+            Console.WriteLine("--------------------------------------------------------------------- ");
+            Console.WriteLine(
+                "Inserted {0} graph elements ({1} vertices, {2} edges) @ {3} writes/s, {4} RU/s in {5} sec)",
+                vResponse.NumberOfDocumentsImported + eResponse.NumberOfDocumentsImported,
+                vResponse.NumberOfDocumentsImported,
+                eResponse.NumberOfDocumentsImported,
+                Math.Round(
+                    (vResponse.NumberOfDocumentsImported) /
+                    (vResponse.TotalTimeTaken.TotalSeconds + eResponse.TotalTimeTaken.TotalSeconds)),
+                Math.Round(
+                    (vResponse.TotalRequestUnitsConsumed + eResponse.TotalRequestUnitsConsumed) /
+                    (vResponse.TotalTimeTaken.TotalSeconds + eResponse.TotalTimeTaken.TotalSeconds)),
+                vResponse.TotalTimeTaken.TotalSeconds + eResponse.TotalTimeTaken.TotalSeconds);
+            Console.WriteLine(
+                "Average RU consumption per insert: {0}",
+                (vResponse.TotalRequestUnitsConsumed + eResponse.TotalRequestUnitsConsumed) /
+                (vResponse.NumberOfDocumentsImported + eResponse.NumberOfDocumentsImported));
+            Console.WriteLine("---------------------------------------------------------------------\n ");
+
+            if (vResponse.BadInputDocuments.Count > 0 || eResponse.BadInputDocuments.Count > 0)
+            {
+                using (System.IO.StreamWriter file = new System.IO.StreamWriter(@".\BadVertices.txt", true))
+                {
+                    foreach (object doc in vResponse.BadInputDocuments)
+                    {
+                        file.WriteLine(doc);
+                    }
+                }
+
+                using (System.IO.StreamWriter file = new System.IO.StreamWriter(@".\BadEdges.txt", true))
+                {
+                    foreach (object doc in eResponse.BadInputDocuments)
+                    {
+                        file.WriteLine(doc);
+                    }
+                }
+            }
+
+            // Cleanup on finish if set in config.
+            if (bool.Parse(ConfigurationManager.AppSettings["ShouldCleanupOnFinish"]))
+            {
+                Trace.TraceInformation("Deleting Database {0}", DatabaseName);
+                await client.DeleteDatabaseAsync(UriFactory.CreateDatabaseUri(DatabaseName));
+            }
+
+
 
             Trace.WriteLine("\nPress any key to exit.");
             Console.ReadKey();

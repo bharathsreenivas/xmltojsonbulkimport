@@ -30,5 +30,25 @@ namespace SATPOC
 
             return jsonDocuments;
         }
+
+        internal static List<Tuple<string, string, string>> XmlToTuples(List<String> xmlDocuments)
+        {
+            List<Tuple<string, string, string>> mapping = new List<Tuple<string, string, string>>();
+
+            foreach (String document in xmlDocuments)
+            {
+                XmlDocument xmlDoc = new XmlDocument();
+                xmlDoc.LoadXml(document);
+                string jsonText = JsonConvert.SerializeXmlNode(xmlDoc, Formatting.Indented);
+                var jObject = JObject.Parse(jsonText);
+                string emisor = jObject["cfdi:Comprobante"]["cfdi:Emisor"]["@Rfc"].ToString();
+                string receptor = jObject["cfdi:Comprobante"]["cfdi:Receptor"]["@Rfc"].ToString();
+                string cfdiinvoice = jObject["cfdi:Comprobante"]["cfdi:Complemento"]["tfd:TimbreFiscalDigital"]["@UUID"].ToString();
+                mapping.Add(new Tuple<string, string, string>(emisor, cfdiinvoice, "E"));
+                mapping.Add(new Tuple<string, string, string>(cfdiinvoice, receptor, "R"));
+            }
+
+            return mapping;
+        }
     }
 }
