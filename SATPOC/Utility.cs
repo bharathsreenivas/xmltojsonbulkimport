@@ -37,15 +37,22 @@ namespace SATPOC
 
             foreach (String document in xmlDocuments)
             {
-                XmlDocument xmlDoc = new XmlDocument();
-                xmlDoc.LoadXml(document);
-                string jsonText = JsonConvert.SerializeXmlNode(xmlDoc, Formatting.Indented);
-                var jObject = JObject.Parse(jsonText);
-                string emisor = jObject["cfdi:Comprobante"]["cfdi:Emisor"]["@Rfc"].ToString();
-                string receptor = jObject["cfdi:Comprobante"]["cfdi:Receptor"]["@Rfc"].ToString();
-                string cfdiinvoice = jObject["cfdi:Comprobante"]["cfdi:Complemento"]["tfd:TimbreFiscalDigital"]["@UUID"].ToString();
-                mapping.Add(new Tuple<string, string, string>(emisor, cfdiinvoice, "E"));
-                mapping.Add(new Tuple<string, string, string>(cfdiinvoice, receptor, "R"));
+                try
+                {
+                    XmlDocument xmlDoc = new XmlDocument();
+                    xmlDoc.LoadXml(document);
+                    string jsonText = JsonConvert.SerializeXmlNode(xmlDoc, Formatting.Indented);
+                    var jObject = JObject.Parse(jsonText);
+                    string emisor = jObject["cfdi:Comprobante"]["cfdi:Emisor"]["@rfc"].ToString();
+                    string receptor = jObject["cfdi:Comprobante"]["cfdi:Receptor"]["@rfc"].ToString();
+                    string cfdiinvoice = jObject["cfdi:Comprobante"]["cfdi:Complemento"]["tfd:TimbreFiscalDigital"]["@UUID"].ToString();
+                    mapping.Add(new Tuple<string, string, string>(emisor, cfdiinvoice, "E"));
+                    mapping.Add(new Tuple<string, string, string>(cfdiinvoice, receptor, "R"));
+                }
+                catch (Exception ex)
+                {
+                     Console.WriteLine("Input data in wrong format \n" + ex.ToString());
+                } 
             }
 
             return mapping;
